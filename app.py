@@ -1,68 +1,68 @@
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
+import io
 
-# 頁面基本配置
-st.set_page_config(page_title="AI 客服排班助理", layout="wide", page_icon="📅")
+# API 初始化
+try:
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+except:
+    st.error("請在 Streamlit Secrets 中設定 OPENAI_API_KEY")
 
-# 自定義 CSS 美化介面
-st.markdown("""
-    <style>
-    .main { background-color: #f5f7f9; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #007bff; color: white; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- AI 核心處理函數 ---
 
-# 側邊欄：功能選擇
-with st.sidebar:
-    st.title("🤖 排班助理系統")
-    st.markdown("---")
-    app_mode = st.radio(
-        "請選擇核心功能：",
-        ["1. 休假生成", "2. 休假檢核", "3. 一鍵排班"]
+def ask_ai_about_roster(df, task_description):
+    """將 Excel 轉為文字後送給 AI 處理"""
+    # 將 DataFrame 轉為 Markdown 字串，方便 AI 閱讀
+    df_str = df.to_markdown()
+    
+    prompt = f"""
+    你是一位專業的客服中心排班專家。以下是目前的班表數據：
+    {df_str}
+    
+    你的任務是：{task_description}
+    請務必保持邏輯嚴謹，並以表格或條列式格式輸出結果。
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o", # 建議使用邏輯能力較強的型號
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2 # 降低隨機性，確保排班穩定
     )
-    st.divider()
-    st.info("💡 提示：請先在『系統設定』中配置 OpenAI API Key。")
+    return response.choices[0].message.content
 
-# --- 功能區塊實作 ---
+# --- UI 邏輯調整 ---
 
-if app_mode == "1. 休假生成":
-    st.header("🏖️ 休假生成器")
-    st.write("上傳包含員工休假意願或初步假表的 Excel，AI 將協助產出完整休假班表。")
-    
-    uploaded_file = st.file_uploader("上傳 Excel (員工休假意願表)", type=["xlsx", "xls"])
-    if uploaded_file:
-        df = pd.read_excel(uploaded_file)
-        st.write("預覽原始數據：")
-        st.dataframe(df, use_container_width=True)
-        
-        if st.button("開始 AI 休假生成"):
-            with st.spinner("AI 正在協調休假中..."):
-                # 第二階段將在此串接 OpenAI Logic
-                st.success("休假生成完畢！(測試版：目前僅為介面展示)")
-                st.download_button("下載完整休假表", data="mock_data", file_name="vacation_plan.xlsx")
+st.title("📅 客服排班助理 - 第二階段")
 
-elif app_mode == "2. 休假檢核":
-    st.header("🔍 休假合規檢核")
-    st.write("依據產出的休假表，檢查是否符合勞基法或人力覆蓋率。")
-    
-    check_file = st.file_uploader("上傳完整休假表進行檢核", type=["xlsx", "xls"])
-    if check_file:
-        st.warning("正在掃描規則：1. 假日人力不得低於 5 人 2. 不可連續工作超過 6 天")
-        if st.button("執行 AI 檢核"):
-            # 這裡之後會放 AI 檢核邏輯
-            st.error("檢核結果：發現 2 處異常（小明連上 7 天、週日人力不足）。")
+tab1, tab2, tab3 = st.tabs(["🏖️ 休假生成", "🔍 休假檢核", "⚡ 一鍵排班"])
 
-elif app_mode == "3. 一鍵排班":
-    st.header("⚡ 一鍵自動排班")
-    st.write("根據最終確定的休假表與進線人力需求，生成正式班表。")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        v_file = st.file_uploader("步驟 A：上傳最終休假表", type=["xlsx"])
-    with col2:
-        d_file = st.file_uploader("步驟 B：上傳人力需求預測", type=["xlsx"])
-        
-    if v_file and d_file:
-        if st.button("生成正式排班表"):
-            st.info("AI 正在計算最佳排班組合...")
+with tab1:
+    st.subheader("1. 休假生成")
+    file1 = st.file_uploader("上傳員工休假意願 (Excel/CSV)", type=['xlsx', 'csv'], key="u1")
+    if file1:
+        df1 = pd.read_excel(file1) if file1.name.endswith('xlsx') else pd.read_csv(file1)
+        if st.button("AI 自動協調休假"):
+            with st.spinner("正在協調人力與休假..."):
+                task = "根據這份意願清單，產出一份完整的休假表。規則：每天至少保留 60% 的人力在線，若有衝突，請公平分配。"
+                result = ask_ai_about_roster(df1, task)
+                st.markdown(result)
+
+with tab2:
+    st.subheader("2. 休假檢核")
+    file2 = st.file_uploader("上傳待檢核班表", type=['xlsx', 'csv'], key="u2")
+    if file2:
+        df2 = pd.read_excel(file2) if file2.name.endswith('xlsx') else pd.read_csv(file2)
+        if st.button("執行 AI 合規檢核"):
+            with st.spinner("正在掃描勞基法與排班規則..."):
+                task = """檢查此班表是否符合以下規則：
+                1. 員工不可連續工作超過 6 天。
+                2. 每日早班至少要有 2 位資深人員。
+                3. 若有違反，請明確列出姓名與日期。"""
+                result = ask_ai_about_roster(df2, task)
+                st.markdown(result)
+
+with tab3:
+    st.subheader("3. 一鍵排班")
+    st.write("此功能將結合休假表與人力預估，生成正式班表。")
+    # 此處邏輯類推...
