@@ -1,83 +1,136 @@
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
+import json
 import io
 
-# 1. 初始化 OpenAI Client (新版語法)
+# 1. 初始化與頁面配置
+st.set_page_config(page_title="AI 客服排班助理", layout="wide", page_icon="📅")
+
+# 從 Streamlit Secrets 讀取 API Key
 try:
     client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 except Exception as e:
-    st.error("OpenAI API Key 未正確設定於 Secrets 中。")
+    st.error("請確認 Streamlit Secrets 中已設定 OPENAI_API_KEY")
 
-# 頁面基本配置
-st.set_page_config(page_title="AI 客服排班助理", layout="wide", page_icon="📅")
-
-# --- 2. 核心 AI 處理函數 ---
-def ask_ai_about_roster(df, task_type, max_off):
-    # 資料清理：將空值轉為「-」方便 AI 閱讀，並轉為 Markdown 格式
-    df_filled = df.fillna("-")
-    df_str = df_filled.to_markdown(index=False)
+# 2. 核心處理函數：使用 JSON 模式確保數據穩定轉回 Excel
+def process_roster_with_ai(df, task_type, max_off):
+    # 將原始數據轉為 CSV 格式字串，節省 Token 並讓 AI 好讀
+    csv_data = df.fillna("-").to_csv(index=False)
     
-    # 針對三個區塊設計不同的任務指令
+    # 根據不同功能設定指令
     if task_type == "休假生成":
-        instruction = f"請根據意願表填補空值為『休』。規則：每日(縱向日期欄)總休假人數不可超過 {max_off} 人，且需確保每位員工每月總休假天數大致平均。"
+        task_prompt = f"請填補空白處為『休』。規則：每日(縱向日期)總休假人數不可超過 {max_off} 人，且需考慮員工休假公平性。"
     elif task_type == "休假檢核":
-        instruction = f"請檢查此班表：1. 每日(縱向)是否有日期超過 {max_off} 人休假？ 2. 員工(橫向)是否有人連續工作超過 6 天未安排休息？"
+        task_prompt = f"請檢核此班表。規則：1.每日(縱向)休假不可超過 {max_off} 人。 2.員工(橫向)不可連續工作超過 6 天。"
     else: # 一鍵排班
-        instruction = f"根據已確認的休假表，為剩餘日期填入排班代碼(如:早、中、晚)。規則：每日休假上限 {max_off} 人，且每日各班次需有足夠人力。"
+        task_prompt = f"參考已確認休假，填入排班代碼(早/中/晚)。規則：每日休假上限 {max_off} 人，並確保各班次人力充足。"
+
+    system_msg = "你是一個精確的台灣客服中心排班分析師。你必須僅以 JSON 格式回覆。"
+    user_msg = f"""
+    請處理以下班表數據：
+    {csv_data}
+
+    任務：{task_prompt}
+
+    【輸出規範】
+    必須回傳 JSON 物件，格式如下：
+    {{
+      "analysis": "這裡填寫分析摘要與規則違反說明",
+      "updated_data": [ {{ "姓名": "...", "1": "休", "2": "-", ... }}, ... ]
+    }}
+    """
 
     try:
-        # 新版 OpenAI API 呼叫方式
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": "你是一位台灣客服中心排班專家，擅長處理 Excel 班表矩陣並嚴格執行規則。"},
-                {"role": "user", "content": f"數據表格如下（橫向為日期，縱向為人員）：\n\n{df_str}\n\n任務需求：{instruction}\n請先給出分析結果，再提供更新後的表格。"}
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg}
             ],
+            response_format={ "type": "json_object" },
             temperature=0.1
         )
-        return response.choices[0].message.content
+        return json.loads(response.choices[0].message.content)
     except Exception as e:
-        return f"AI 處理時發生錯誤：{str(e)}"
+        st.error(f"AI 處理失敗: {str(e)}")
+        return None
 
-# --- 3. UI 介面實作 ---
-st.title("🤖 AI 排班助理")
+# 3. UI 介面實作
+st.title("🤖 AI 客服排班助理")
+st.markdown("針對專案主管設計的自動化排班工具，支援休假協調、合規檢核與快速排班。")
 
 with st.sidebar:
     st.header("⚙️ 規則設定")
-    max_off = st.slider("每日最高休假人數上限", 1, 5, 3)
+    max_off = st.slider("每日最高休假人數上限", 1, 10, 3)
     st.divider()
-    st.info(f"💡 當前規則：每天最多 {max_off} 人休假")
+    st.info(f"💡 目前設定：每天最多 {max_off} 人休假")
 
+# 定義功能區塊
 tab1, tab2, tab3 = st.tabs(["🏖️ 休假生成", "🔍 休假檢核", "⚡ 一鍵排班"])
 
-# 這裡以「休假生成」為例，其他區塊邏輯類推
+# 區塊 1：休假生成
 with tab1:
     st.subheader("1. 休假生成")
-    st.write("上傳主管預選休範本，由 AI 自動分配剩餘休假。")
-    file1 = st.file_uploader("上傳 Excel (預選休範本)", type=['xlsx'], key="u1")
-    
-    if file1:
-        df1 = pd.read_excel(file1)
-        st.dataframe(df1.head(10), use_container_width=True) # 預覽前10筆
+    u1 = st.file_uploader("上傳『預選休範本』Excel", type=['xlsx'], key="u1")
+    if u1:
+        df1 = pd.read_excel(u1)
+        st.write("原始資料預覽：")
+        st.dataframe(df1.head(5), use_container_width=True)
         
-        if st.button("開始 AI 休假生成"):
-            with st.spinner("AI 正在計算最佳休假組合..."):
-                result = ask_ai_about_roster(df1, "休假生成", max_off)
-                st.markdown("### AI 處理結果")
-                st.markdown(result)
+        if st.button("🚀 開始執行休假生成"):
+            with st.spinner("AI 正在計算並協調假位..."):
+                result = process_roster_with_ai(df1, "休假生成", max_off)
+                if result:
+                    st.success("處理完成！")
+                    st.info(f"**AI 分析摘要：**\n{result['analysis']}")
+                    
+                    # 轉換數據回 Excel 供下載
+                    new_df = pd.DataFrame(result['updated_data'])
+                    st.dataframe(new_df, use_container_width=True)
+                    
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        new_df.to_excel(writer, index=False)
+                    
+                    st.download_button(
+                        label="📥 下載產出的休假表",
+                        data=output.getvalue(),
+                        file_name="AI_休假生成結果.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
 
+# 區塊 2：休假檢核
 with tab2:
     st.subheader("2. 休假檢核")
-    file2 = st.file_uploader("上傳完整班表進行檢核", type=['xlsx'], key="u2")
-    if file2:
-        df2 = pd.read_excel(file2)
-        if st.button("執行 AI 合規檢核"):
-            with st.spinner("正在掃描排班規則..."):
-                result = ask_ai_about_roster(df2, "休假檢核", max_off)
-                st.markdown(result)
+    u2 = st.file_uploader("上傳『完整休假表』進行檢核", type=['xlsx'], key="u2")
+    if u2:
+        df2 = pd.read_excel(u2)
+        if st.button("🔍 執行合規檢查"):
+            with st.spinner("正在掃描規則違反項..."):
+                result = process_roster_with_ai(df2, "休假檢核", max_off)
+                if result:
+                    st.warning(f"**檢核報告：**\n{result['analysis']}")
+                    st.write("檢核數據預覽：")
+                    st.dataframe(pd.DataFrame(result['updated_data']), use_container_width=True)
 
+# 區塊 3：一鍵排班
 with tab3:
-    st.subheader("3. 一鍵排班")
-    st.info("此功能會基於確定的休假表生成最終班表，建議於完成休假檢核後使用。")
-    # 此處可加入類似 tab1 的實作
+    st.subheader("3. 一鍵正式排班")
+    st.info("請上傳已確定的休假表，AI 將填入早/中/晚班代碼。")
+    u3 = st.file_uploader("上傳最終休假表", type=['xlsx'], key="u3")
+    if u3:
+        df3 = pd.read_excel(u3)
+        if st.button("🪄 生成正式排班表"):
+             with st.spinner("正在優化班次分配..."):
+                result = process_roster_with_ai(df3, "正式排班", max_off)
+                if result:
+                    st.info(result['analysis'])
+                    final_df = pd.DataFrame(result['updated_data'])
+                    st.dataframe(final_df, use_container_width=True)
+                    
+                    # 下載邏輯同上...
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        final_df.to_excel(writer, index=False)
+                    st.download_button("📥 下載正式班表", output.getvalue(), "Final_Roster.xlsx")
