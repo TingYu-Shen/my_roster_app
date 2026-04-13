@@ -10,11 +10,11 @@ except:
 
 # --- 2. 核心 AI 函數 (在此段落加入規則) ---
 def ask_ai_about_roster(df, task_type, max_off):
-    # 資料清理：確保空值被視為上班，並轉為字串讓 AI 閱讀
+    # 資料清理
     df_filled = df.fillna("上班")
     df_str = df_filled.to_markdown(index=False)
     
-    # 這裡就是關鍵：根據不同的功能區塊，注入「每日最多 X 人」的指令
+    # 定義指令
     if task_type == "休假生成":
         instruction = f"請填補空白處為『休』。規則：每日(縱向)總休假人數不可超過 {max_off} 人，且員工(橫向)需符合勞基法不連上6天。"
     elif task_type == "休假檢核":
@@ -22,25 +22,17 @@ def ask_ai_about_roster(df, task_type, max_off):
     else:
         instruction = f"請參考休假表產出排班。每日(縱向)休假上限為 {max_off} 人。"
 
-    prompt = f"""
-    你是一位台灣客服中心排班專家。
-    數據格式：橫向為日期(1-31)，縱向為員工姓名。內容『休』代表休假，『上班』代表出勤。
-    
-    【班表數據】
-    {df_str}
-    
-    【你的任務】
-    {instruction}
-    
-    請以專業、條列式的方式回覆結果。
-    """
-    
+    # --- 關鍵修正處：新版 OpenAI API 語法 ---
     response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[{"role": "system", "content": "你是一個精確的數據分析師"},
-                  {"role": "user", "content": prompt}],
+        model="gpt-4o",  # 或使用 "gpt-3.5-turbo"
+        messages=[
+            {"role": "system", "content": "你是一個精確的台灣客服中心排班數據分析師。"},
+            {"role": "user", "content": f"數據表格如下：\n{df_str}\n\n任務：{instruction}"}
+        ],
         temperature=0.1
     )
+    
+    # 新版讀取結果的方式是 .choices[0].message.content
     return response.choices[0].message.content
 
 # --- 3. UI 介面 ---
