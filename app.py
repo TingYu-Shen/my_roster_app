@@ -13,32 +13,68 @@ except Exception as e:
 st.set_page_config(page_title="AI 客服排班助理", layout="wide", page_icon="📅")
 
 # --- 2. 核心 AI 處理函數 ---
-def ask_ai_about_roster(df, task_type, max_off):
-    # 資料清理：將空值轉為「-」方便 AI 閱讀，並轉為 Markdown 格式
-    df_filled = df.fillna("-")
-    df_str = df_filled.to_markdown(index=False)
-    
-    # 針對三個區塊設計不同的任務指令
-    if task_type == "休假生成":
-        instruction = f"請根據意願表填補空值為『休』。規則：每日(縱向日期欄)總休假人數不可超過 {max_off} 人，且需確保每位員工每月總休假天數大致平均。"
-    elif task_type == "休假檢核":
-        instruction = f"請檢查此班表：1. 每日(縱向)是否有日期超過 {max_off} 人休假？ 2. 員工(橫向)是否有人連續工作超過 6 天未安排休息？"
-    else: # 一鍵排班
-        instruction = f"根據已確認的休假表，為剩餘日期填入排班代碼(如:早、中、晚)。規則：每日休假上限 {max_off} 人，且每日各班次需有足夠人力。"
+import json
+import io
 
-    try:
-        # 新版 OpenAI API 呼叫方式
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "你是一位台灣客服中心排班專家，擅長處理 Excel 班表矩陣並嚴格執行規則。"},
-                {"role": "user", "content": f"數據表格如下（橫向為日期，縱向為人員）：\n\n{df_str}\n\n任務需求：{instruction}\n請先給出分析結果，再提供更新後的表格。"}
-            ],
-            temperature=0.1
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        return f"AI 處理時發生錯誤：{str(e)}"
+# ... 前方的初始化與配置保持不變 ...
+
+def ask_ai_with_json(df, task_type, max_off):
+    df_str = df.fillna("-").to_csv(index=False)
+    
+    # 強制要求 AI 輸出 JSON 格式，方便程式碼讀取
+    prompt = f"""
+    你是一位排班數據分析師。請處理以下 CSV 格式的班表：
+    {df_str}
+    
+    任務：{task_type} (每日休假上限 {max_off} 人)。
+    
+    【輸出規範】
+    請『僅』輸出一個 JSON 物件，格式如下：
+    {{
+      "analysis": "這裡填寫你的分析文字摘要",
+      "updated_data": [ {{ "姓名": "...", "1": "休", "2": "上班", ... }}, ... ]
+    }}
+    不要包含 Markdown 代碼塊標籤，直接輸出 JSON 內容。
+    """
+    
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={ "type": "json_object" }, # 強制輸出 JSON
+        temperature=0.1
+    )
+    return json.loads(response.choices[0].message.content)
+
+# --- UI 介面更新 ---
+
+with tab1:
+    st.subheader("1. 休假生成")
+    file1 = st.file_uploader("上傳 Excel", type=['xlsx'], key="u1")
+    if file1:
+        df1 = pd.read_excel(file1)
+        if st.button("開始 AI 生成"):
+            with st.spinner("AI 處理中..."):
+                result_json = ask_ai_with_json(df1, "填補休假", max_off)
+                
+                # 1. 顯示 AI 分析
+                st.info(result_json['analysis'])
+                
+                # 2. 轉換回 DataFrame
+                new_df = pd.DataFrame(result_json['updated_data'])
+                st.write("生成結果預覽：")
+                st.dataframe(new_df, use_container_width=True)
+                
+                # 3. 提供 Excel 下載
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    new_df.to_excel(writer, index=False)
+                
+                st.download_button(
+                    label="📥 下載更新後的 Excel 班表",
+                    data=output.getvalue(),
+                    file_name="AI_Updated_Roster.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
 
 # --- 3. UI 介面實作 ---
 st.title("🤖 AI 排班助理")
