@@ -12,22 +12,28 @@ except:
 # --- AI 核心處理函數 ---
 
 def ask_ai_about_roster(df, task_description):
-    """將 Excel 轉為文字後送給 AI 處理"""
-    # 將 DataFrame 轉為 Markdown 字串，方便 AI 閱讀
-    df_str = df.to_markdown()
+    # 將 DataFrame 的空值填充為 "勤"，明確告知 AI 狀態
+    df_filled = df.fillna("勤")
+    
+    # 轉換成 Markdown 格式
+    df_str = df_filled.to_markdown(index=False)
     
     prompt = f"""
-    你是一位專業的客服中心排班專家。以下是目前的班表數據：
+    你是一位台灣客服中心的排班專家，熟悉《勞基法》與排班實務。
+    以下是 2026 年 1 月的預選休假表（橫向為 1-31 日，縱向為員工）：
+    
     {df_str}
     
-    你的任務是：{task_description}
-    請務必保持邏輯嚴謹，並以表格或條列式格式輸出結果。
+    任務需求：{task_description}
+    
+    請以『條列式摘要』說明檢核結果，並在最後提供一個『建議修正後的表格』。
     """
     
     response = client.chat.completions.create(
-        model="gpt-4o", # 建議使用邏輯能力較強的型號
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2 # 降低隨機性，確保排班穩定
+        model="gpt-4o",
+        messages=[{"role": "system", "content": "你是一個嚴謹的排班數據分析師。"},
+                  {"role": "user", "content": prompt}],
+        temperature=0.1 # 調低隨機性，確保排班邏輯一致
     )
     return response.choices[0].message.content
 
