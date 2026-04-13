@@ -7,14 +7,25 @@ import io
 # 1. 初始化與頁面配置
 st.set_page_config(page_title="AI 客服排班助理", layout="wide", page_icon="📅")
 
-# 從 Streamlit Secrets 讀取 API Key
-try:
-    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
-except Exception as e:
-    st.error("請確認 Streamlit Secrets 中已設定 OPENAI_API_KEY")
+# --- 關鍵修正：將 client 宣告在函數外面，確保全域都能讀到 ---
+client = None 
 
-# 2. 核心處理函數：使用 JSON 模式確保數據穩定轉回 Excel
+if "OPENAI_API_KEY" in st.secrets:
+    try:
+        # 建立 OpenAI 客戶端實例
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+    except Exception as e:
+        st.error(f"OpenAI 客戶端啟動失敗：{str(e)}")
+else:
+    st.error("請在 Streamlit Secrets 中設定 OPENAI_API_KEY (格式：OPENAI_API_KEY = 'sk-...')")
+
+# 2. 核心處理函數
 def process_roster_with_ai(df, task_type, max_off):
+    # 檢查 client 是否存在
+    if client is None:
+        st.error("無法執行，因為 OpenAI API 未正確連接。")
+        return None
+        
     # 將原始數據轉為 CSV 格式字串，節省 Token 並讓 AI 好讀
     csv_data = df.fillna("-").to_csv(index=False)
     
