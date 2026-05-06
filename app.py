@@ -7,8 +7,8 @@ import scheduler  # Python 排班引擎
 import checker    # Python 檢核引擎
 
 # --- API 設定 ---
-# 提醒：若在 GitHub Codespaces 執行，建議改用 st.secrets["GEMINI_API_KEY"]
-API_KEY = "AIzaSyDVB8pXr1X4xQUAbtRwNpPgxTnQdgNfvaE" 
+# 從 secrets.toml 檔案中自動讀取金鑰
+my_key = st.secrets["GEMINI_API_KEY"]
 
 if "configured" not in st.session_state:
     try:
