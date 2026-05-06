@@ -1,147 +1,195 @@
 import streamlit as st
 import pandas as pd
-from openai import OpenAI
-import json
-import io
+from io import BytesIO, StringIO
+import google.generativeai as genai
+import prompts
+import scheduler  # Python 排班引擎
+import checker    # Python 檢核引擎
 
-# 1. 初始化與頁面配置
-st.set_page_config(page_title="AI 客服排班助理", layout="wide", page_icon="📅")
+# --- API 設定 ---
+# 提醒：若在 GitHub Codespaces 執行，建議改用 st.secrets["GEMINI_API_KEY"]
+API_KEY = "AIzaSyDVB8pXr1X4xQUAbtRwNpPgxTnQdgNfvaE" 
 
-# --- 關鍵修正：將 client 宣告在函數外面，確保全域都能讀到 ---
-client = None 
-
-if "OPENAI_API_KEY" in st.secrets:
+if "configured" not in st.session_state:
     try:
-        # 建立 OpenAI 客戶端實例
-        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        genai.configure(api_key=API_KEY)
+        st.session_state["configured"] = True
     except Exception as e:
-        st.error(f"OpenAI 客戶端啟動失敗：{str(e)}")
-else:
-    st.error("請在 Streamlit Secrets 中設定 OPENAI_API_KEY (格式：OPENAI_API_KEY = 'sk-...')")
+        st.error(f"API 配置失敗，請檢查 Key 是否正確：{e}")
 
-# 2. 核心處理函數
-def process_roster_with_ai(df, task_type, max_off):
-    # 檢查 client 是否存在
-    if client is None:
-        st.error("無法執行，因為 OpenAI API 未正確連接。")
-        return None
-        
-    # 將原始數據轉為 CSV 格式字串，節省 Token 並讓 AI 好讀
-    csv_data = df.fillna("-").to_csv(index=False)
-    
-    # 根據不同功能設定指令
-    if task_type == "休假生成":
-        task_prompt = f"請填補空白處為『休』。規則：每日(縱向日期)總休假人數不可超過 {max_off} 人，且需考慮員工休假公平性。"
-    elif task_type == "休假檢核":
-        task_prompt = f"請檢核此班表。規則：1.每日(縱向)休假不可超過 {max_off} 人。 2.員工(橫向)不可連續工作超過 6 天。"
-    else: # 一鍵排班
-        task_prompt = f"參考已確認休假，填入排班代碼(早/中/晚)。規則：每日休假上限 {max_off} 人，並確保各班次人力充足。"
+# --- 網頁設定 ---
+st.set_page_config(page_title="專案主管排班工具", layout="wide")
 
-    system_msg = "你是一個精確的台灣客服中心排班分析師。你必須僅以 JSON 格式回覆。"
-    user_msg = f"""
-    請處理以下班表數據：
-    {csv_data}
+# --- 側邊欄設定 (更新為你指定的最新模型路徑) ---
+model_map = {
+    "Gemini 3.1 Pro (最新預覽)": "models/gemini-3.1-pro-preview",
+    "Gemini 3.1 Flash Lite (極速預覽)": "models/gemini-3.1-flash-lite-preview",
+    "Gemini 3.0 Pro (進階預覽)": "models/gemini-3-pro-preview",
+    "Gemini 3.0 Flash (平衡預覽)": "models/gemini-3-flash-preview",
+    "Gemini 2.5 Flash Lite (效能優化)": "models/gemini-2.5-flash-lite",
+    "Gemini 1.5 Pro (穩定備援)": "models/gemini-1.5-pro",
+    "Gemini 1.5 Flash (極速備援)": "models/gemini-1.5-flash"
+}
 
-    任務：{task_prompt}
+st.sidebar.title("🤖 AI 模型設定")
+model_option = st.sidebar.selectbox("選擇使用 Model", list(model_map.keys()))
 
-    【輸出規範】
-    必須回傳 JSON 物件，格式如下：
-    {{
-      "analysis": "這裡填寫分析摘要與規則違反說明",
-      "updated_data": [ {{ "姓名": "...", "1": "休", "2": "-", ... }}, ... ]
-    }}
+# --- 共用函數 ---
+def call_gemini(prompt_text, data_df):
     """
-
+    統一呼叫 Gemini 的入口
+    """
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": system_msg},
-                {"role": "user", "content": user_msg}
-            ],
-            response_format={ "type": "json_object" },
-            temperature=0.1
-        )
-        return json.loads(response.choices[0].message.content)
+        model = genai.GenerativeModel(model_map[model_option])
+        input_csv = data_df.to_csv(index=False)
+        full_prompt = f"{prompt_text}\n\n原始資料（CSV格式）：\n{input_csv}"
+        
+        response = model.generate_content(full_prompt)
+        return response.text
     except Exception as e:
-        st.error(f"AI 處理失敗: {str(e)}")
+        st.error(f"AI 處理失敗：{str(e)}")
         return None
 
-# 3. UI 介面實作
-st.title("🤖 AI 客服排班助理")
-st.markdown("針對專案主管設計的自動化排班工具，支援休假協調、合規檢核與快速排班。")
+def parse_csv_response(text):
+    clean_text = text.replace("```csv", "").replace("```", "").strip()
+    return pd.read_csv(StringIO(clean_text))
 
-with st.sidebar:
-    st.header("⚙️ 規則設定")
-    max_off = st.slider("每日最高休假人數上限", 1, 10, 3)
-    st.divider()
-    st.info(f"💡 目前設定：每天最多 {max_off} 人休假")
+def to_excel(df):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False)
+    return output.getvalue()
 
-# 定義功能區塊
-tab1, tab2, tab3 = st.tabs(["🏖️ 休假生成", "🔍 休假檢核", "⚡ 一鍵排班"])
+# --- 側邊欄導覽 ---
+st.sidebar.markdown("---")
+st.sidebar.title("📅 排班管理系統")
+page = st.sidebar.radio("選擇功能模組", ["1. 休假生成 (Python 版)", "2. 休假檢核", "3. 一鍵排班"])
 
-# 區塊 1：休假生成
-with tab1:
-    st.subheader("1. 休假生成")
-    u1 = st.file_uploader("上傳『預選休範本』Excel", type=['xlsx'], key="u1")
-    if u1:
-        df1 = pd.read_excel(u1)
-        st.write("原始資料預覽：")
-        st.dataframe(df1.head(5), use_container_width=True)
+# --- 功能 1：休假生成 ---
+if page == "1. 休假生成 (Python 版)":
+    st.header("✨ 功能一：月休假自動補件")
+    st.info("使用 Python 引擎進行精確計算，自動補齊每週 2 天休假 (DO)。")
+    
+    # 參數設定
+    with st.expander("⚙️ 進階排班參數設定", expanded=True):
+        max_people = st.number_input("單日最大休假人數限制 (AL+DO)", min_value=1, max_value=10, value=3)
+    
+    uploaded_file = st.file_uploader("上傳 Excel 預選假表", type=["xlsx"], key="f1")
+    
+    if uploaded_file:
+        df = pd.read_excel(uploaded_file)
+        st.subheader("原始資料預覽")
+        st.dataframe(df, use_container_width=True)
         
-        if st.button("🚀 開始執行休假生成"):
-            with st.spinner("AI 正在計算並協調假位..."):
-                result = process_roster_with_ai(df1, "休假生成", max_off)
-                if result:
-                    st.success("處理完成！")
-                    st.info(f"**AI 分析摘要：**\n{result['analysis']}")
-                    
-                    # 轉換數據回 Excel 供下載
-                    new_df = pd.DataFrame(result['updated_data'])
-                    st.dataframe(new_df, use_container_width=True)
-                    
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        new_df.to_excel(writer, index=False)
-                    
-                    st.download_button(
-                        label="📥 下載產出的休假表",
-                        data=output.getvalue(),
-                        file_name="AI_休假生成結果.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
+        if st.button("🚀 執行 Python 自動排班"):
+            with st.spinner("引擎計算中..."):
+                try:
+                    # 調用 scheduler 並傳入自定義人數限制
+                    processed_df = scheduler.solve_scheduling_df(df, max_off_per_day=max_people)
+                    st.session_state['vacation_table'] = processed_df
+                    st.success(f"計算完成！已確保每日休假不超過 {max_people} 人。")
+                except Exception as e:
+                    st.error(f"程式計算出錯：{e}")
+        
+        if 'vacation_table' in st.session_state:
+            st.subheader("生成結果 (可直接於下方微調)")
+            edited_df = st.data_editor(st.session_state['vacation_table'], use_container_width=True)
+            st.download_button(
+                "下載結果 Excel", 
+                data=to_excel(edited_df), 
+                file_name="monthly_vacation_plan.xlsx"
+            )
 
-# 區塊 2：休假檢核
-with tab2:
-    st.subheader("2. 休假檢核")
-    u2 = st.file_uploader("上傳『完整休假表』進行檢核", type=['xlsx'], key="u2")
-    if u2:
-        df2 = pd.read_excel(u2)
-        if st.button("🔍 執行合規檢查"):
-            with st.spinner("正在掃描規則違反項..."):
-                result = process_roster_with_ai(df2, "休假檢核", max_off)
-                if result:
-                    st.warning(f"**檢核報告：**\n{result['analysis']}")
-                    st.write("檢核數據預覽：")
-                    st.dataframe(pd.DataFrame(result['updated_data']), use_container_width=True)
+# --- 功能 2：休假檢核 ---
+elif page == "2. 休假檢核":
+    st.header("🔍 功能二：休假合法性檢核")
+    st.info("透過 Python 引擎進行 100% 精確檢核，亦可搭配 AI 進行智慧分析。")
+    
+    # 參數設定
+    with st.expander("⚙️ 檢核參數設定", expanded=True):
+        check_max_people = st.number_input("檢核單日最大休假人數上限", min_value=1, max_value=10, value=3, key="check_max")
 
-# 區塊 3：一鍵排班
-with tab3:
-    st.subheader("3. 一鍵正式排班")
-    st.info("請上傳已確定的休假表，AI 將填入早/中/晚班代碼。")
-    u3 = st.file_uploader("上傳最終休假表", type=['xlsx'], key="u3")
-    if u3:
-        df3 = pd.read_excel(u3)
-        if st.button("🪄 生成正式排班表"):
-             with st.spinner("正在優化班次分配..."):
-                result = process_roster_with_ai(df3, "正式排班", max_off)
-                if result:
-                    st.info(result['analysis'])
-                    final_df = pd.DataFrame(result['updated_data'])
-                    st.dataframe(final_df, use_container_width=True)
-                    
-                    # 下載邏輯同上...
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        final_df.to_excel(writer, index=False)
-                    st.download_button("📥 下載正式班表", output.getvalue(), "Final_Roster.xlsx")
+    source = st.radio("資料來源", ["沿用前一功能結果", "重新上傳 Excel"])
+    
+    check_df = None
+    if source == "沿用前一功能結果":
+        if 'vacation_table' in st.session_state:
+            check_df = st.session_state['vacation_table']
+        else:
+            st.warning("目前暫無暫存資料，請先執行功能一或選擇重新上傳。")
+    else:
+        uploaded_file = st.file_uploader("上傳待檢核 Excel", type=["xlsx"], key="f2")
+        if uploaded_file:
+            check_df = pd.read_excel(uploaded_file)
+
+    if check_df is not None:
+        st.subheader("待檢核資料預覽")
+        st.dataframe(check_df, use_container_width=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🚀 執行系統精確檢核 (Python 版)"):
+                # 調用 checker 並傳入使用者設定的人數上限
+                report = checker.check_rules(check_df, max_off_per_day=check_max_people)
+                st.markdown(report)
+        
+        with col2:
+            if st.button("🤖 執行 AI 智慧分析 (Gemini 版)"):
+                with st.spinner("Gemini 正在分析規則..."):
+                    # 將自定義人數限制加入 Prompt
+                    custom_prompt = f"請以「每日休假上限 {check_max_people} 人」為準進行檢核。\n{prompts.PROMPT_2_CHECK}"
+                    report_text = call_gemini(custom_prompt, check_df)
+                    if report_text:
+                        st.subheader("AI 智慧檢核報告")
+                        st.markdown(report_text)
+
+# --- 功能 3：一鍵排班 ---
+elif page == "3. 一鍵排班":
+    st.header("🚀 功能三：一鍵自動排班")
+    st.info("根據確認後的休假表，由 AI 自動分配專案班別。")
+    
+    # 新增：選擇資料來源
+    source_f3 = st.radio("資料來源", ["沿用休假生成結果", "重新上傳確認後的假表"], key="radio_f3")
+    
+    final_vacation_df = None
+    
+    if source_f3 == "沿用休假生成結果":
+        if 'vacation_table' in st.session_state:
+            final_vacation_df = st.session_state['vacation_table']
+            st.success("已成功沿用前一階段的休假資料。")
+        else:
+            st.warning("目前暫無暫存資料，請先執行「功能一」或選擇「重新上傳」。")
+    else:
+        uploaded_file = st.file_uploader("上傳最終確認休假表", type=["xlsx"], key="f3")
+        if uploaded_file:
+            final_vacation_df = pd.read_excel(uploaded_file)
+    
+    # 確保有資料才顯示後續按鈕
+    if final_vacation_df is not None:
+        st.subheader("待分配班別資料預覽")
+        st.dataframe(final_vacation_df, use_container_width=True)
+        
+        if st.button("啟動 AI 自動配班"):
+            with st.spinner("Gemini 正在媒合專案與人員..."):
+                # 調用 call_gemini 進行配班
+                ai_response = call_gemini(prompts.PROMPT_3_SCHEDULING, final_vacation_df)
+                if ai_response:
+                    try:
+                        final_schedule = parse_csv_response(ai_response)
+                        st.session_state['final_schedule'] = final_schedule
+                        st.success("班表排定完成！")
+                    except Exception as e:
+                        st.error(f"解析失敗，可能是 AI 回覆格式不正確。")
+                        st.text_area("AI 原始回覆內容", ai_response, height=200)
+        
+        # 顯示結果與下載按鈕
+        if 'final_schedule' in st.session_state:
+            st.markdown("---")
+            st.subheader("最終班表預覽")
+            edited_final = st.data_editor(st.session_state['final_schedule'], use_container_width=True)
+            st.download_button(
+                label="下載最終月份班表",
+                data=to_excel(edited_final),
+                file_name="final_project_schedule.xlsx"
+            )
