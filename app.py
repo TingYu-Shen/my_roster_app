@@ -7,15 +7,20 @@ import scheduler  # Python 排班引擎
 import checker    # Python 檢核引擎
 
 # --- API 設定 ---
-# 從 secrets.toml 檔案中自動讀取金鑰
-my_key = st.secrets["GEMINI_API_KEY"]
+# 修改點：不再直接寫入金鑰字串，改為從安全系統讀取
+try:
+    # 這裡會去讀取 .streamlit/secrets.toml 檔案中的 GEMINI_API_KEY
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+except KeyError:
+    st.error("找不到 API 金鑰。請在 .streamlit/secrets.toml 中設定 GEMINI_API_KEY")
+    st.stop()
 
 if "configured" not in st.session_state:
     try:
-        genai.configure(api_key=GEMINI_API_KEY)
+        genai.configure(api_key=API_KEY)
         st.session_state["configured"] = True
     except Exception as e:
-        st.error(f"API 配置失敗，請檢查 Key 是否正確：{e}")
+        st.error(f"API 配置失敗：{e}")
 
 # --- 網頁設定 ---
 st.set_page_config(page_title="專案主管排班工具", layout="wide")
