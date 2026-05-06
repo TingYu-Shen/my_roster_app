@@ -12,7 +12,7 @@ my_key = st.secrets["GEMINI_API_KEY"]
 
 if "configured" not in st.session_state:
     try:
-        genai.configure(api_key=API_KEY)
+        genai.configure(api_key=GEMINI_API_KEY)
         st.session_state["configured"] = True
     except Exception as e:
         st.error(f"API 配置失敗，請檢查 Key 是否正確：{e}")
