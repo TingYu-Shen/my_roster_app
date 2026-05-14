@@ -190,7 +190,7 @@ elif page == "3. 一鍵排班":
             
             # 新增：最高上限輸入
             st.caption("🔸 設定各班別每日【最高】上限 (格式：班別:人數)")
-            default_max_demand = "A23:1\nA08:1\nA14:1\nA08\nA12:1:1"  
+            default_max_demand = "A23:1\nA08:1\nA14:1\nA08:1\nA12:1"  
             max_demand_input = st.text_area("最高上限清單 (不填則無限制)", value=default_max_demand, height=100)
             
             target_total = st.number_input("關鍵班每日總需求人數 (Total)", min_value=1, value=6)
