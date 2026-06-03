@@ -1,55 +1,14 @@
 import streamlit as st
 import pandas as pd
 from io import BytesIO, StringIO
-import google.generativeai as genai
 from datetime import datetime
-import prompts
 import scheduler  # Python 排班引擎
 import checker    # Python 檢核引擎
-
-# --- API 設定 ---
-API_KEY = "AIzaSyDVB8pXr1X4xQUAbtRwNpPgxTnQdgNfvaE" 
-
-if "configured" not in st.session_state:
-    try:
-        genai.configure(api_key=API_KEY)
-        st.session_state["configured"] = True
-    except Exception as e:
-        st.error(f"API 配置失敗，請檢查 Key 是否正確：{e}")
 
 # --- 網頁設定 ---
 st.set_page_config(page_title="專案主管排班工具", layout="wide")
 
-# --- 側邊欄設定 ---
-model_map = {
-    "Gemini 3.1 Pro (最新預覽)": "models/gemini-3.1-pro-preview",
-    "Gemini 3.1 Flash Lite (極速預覽)": "models/gemini-3.1-flash-lite-preview",
-    "Gemini 3.0 Pro (進階預覽)": "models/gemini-3-pro-preview",
-    "Gemini 3.0 Flash (平衡預覽)": "models/gemini-3-flash-preview",
-    "Gemini 2.5 Flash Lite (效能優化)": "models/gemini-2.5-flash-lite",
-    "Gemini 1.5 Pro (穩定備援)": "models/gemini-1.5-pro",
-    "Gemini 1.5 Flash (極速備援)": "models/gemini-1.5-flash"
-}
-
-st.sidebar.title("🤖 AI 模型設定")
-model_option = st.sidebar.selectbox("選擇使用 Model", list(model_map.keys()))
-
 # --- 共用函數 ---
-def call_gemini(prompt_text, data_df):
-    try:
-        model = genai.GenerativeModel(model_map[model_option])
-        input_csv = data_df.to_csv(index=False)
-        full_prompt = f"{prompt_text}\n\n原始資料（CSV格式）：\n{input_csv}"
-        response = model.generate_content(full_prompt)
-        return response.text
-    except Exception as e:
-        st.error(f"AI 處理失敗：{str(e)}")
-        return None
-
-def parse_csv_response(text):
-    clean_text = text.replace("```csv", "").replace("```", "").strip()
-    return pd.read_csv(StringIO(clean_text))
-
 def to_excel(df):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -67,7 +26,6 @@ def parse_exclusion(input_str):
     return groups
 
 # --- 側邊欄導覽 ---
-st.sidebar.markdown("---")
 st.sidebar.title("📅 排班管理系統")
 page = st.sidebar.radio("選擇功能模組", ["1. 休假生成 (Python 版)", "2. 休假檢核", "3. 一鍵排班"])
 
@@ -145,32 +103,18 @@ elif page == "2. 休假檢核":
         st.subheader("待檢核資料預覽")
         st.dataframe(check_df, use_container_width=True)
         
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            if st.button("🚀 執行系統精確檢核 (Python 版)"):
-                try:
-                    report = checker.check_rules(
-                        check_df, 
-                        max_off_per_day=check_max_people, 
-                        mutually_exclusive_groups=check_exclusive_groups
-                    )
-                    st.markdown(report)
-                except:
-                    report = checker.check_rules(check_df, max_off_per_day=check_max_people)
-                    st.markdown(report)
-        
-        with col2:
-            if st.button("🤖 執行 AI 智慧分析 (Gemini 版)"):
-                with st.spinner("Gemini 正在分析規則..."):
-                    custom_prompt = (
-                        f"檢核標準：1.每日上限 {check_max_people} 人 2.互斥組：{check_exclusive_groups} "
-                        f"3.每週須有 2 個 DO (不含 AL)。\n{prompts.PROMPT_2_CHECK}"
-                    )
-                    report_text = call_gemini(custom_prompt, check_df)
-                    if report_text:
-                        st.subheader("AI 智慧檢核報告")
-                        st.markdown(report_text)
+        # 已移除 AI 分析按鈕，僅保留 Python 系統精確檢核
+        if st.button("🚀 執行系統精確檢核 (Python 版)"):
+            try:
+                report = checker.check_rules(
+                    check_df, 
+                    max_off_per_day=check_max_people, 
+                    mutually_exclusive_groups=check_exclusive_groups
+                )
+                st.markdown(report)
+            except:
+                report = checker.check_rules(check_df, max_off_per_day=check_max_people)
+                st.markdown(report)
 
 # --- 功能 3：一鍵排班 ---
 elif page == "3. 一鍵排班":
@@ -188,7 +132,7 @@ elif page == "3. 一鍵排班":
             default_min_demand = "A08:1\nA09:1\nA10:1\nA12:1\nA14:1\nA23:1"
             min_demand_input = st.text_area("最低需求清單", value=default_min_demand, height=100)
             
-            # 新增：最高上限輸入
+            # 最高上限輸入
             st.caption("🔸 設定各班別每日【最高】上限 (格式：班別:人數)")
             default_max_demand = "A23:1\nA08:1\nA14:1\nA08:1\nA12:1"  
             max_demand_input = st.text_area("最高上限清單 (不填則無限制)", value=default_max_demand, height=100)
@@ -228,54 +172,52 @@ elif page == "3. 一鍵排班":
         st.subheader("待分配班別資料預覽")
         st.dataframe(final_vacation_df, use_container_width=True)
         
-        engine_choice = st.radio("選擇排班引擎", ["Python 邏輯引擎 (精確度高)", "Gemini AI (靈活性高)"], horizontal=True)
-
+        # 已移除引擎切換選項，預設並直接運行 Python 引擎
         if st.button("啟動自動配班", type="primary"):
             with st.spinner("正在進行分配..."):
-                if engine_choice == "Python 邏輯引擎 (精確度高)":
-                    try:
-                        # 1. 解析需求配置 (包含 Min 與 Max)
-                        min_demand_dict = {line.split(":")[0].strip(): int(line.split(":")[1].strip()) 
-                                         for line in min_demand_input.split('\n') if ":" in line}
-                        
-                        max_demand_dict = {line.split(":")[0].strip(): int(line.split(":")[1].strip()) 
-                                         for line in max_demand_input.split('\n') if ":" in line}
-                        
-                        st.session_state['demand_config'] = {
-                            "min_demand": min_demand_dict, 
-                            "max_demand": max_demand_dict,
-                            "total_priority_target": target_total
-                        }
-                        
-                        # 2. 解析員工權限
-                        current_staff_caps = {}
-                        staff_order = []
-                        for line in caps_text.split('\n'):
-                            if ":" in line:
-                                name, shifts = line.split(":")
-                                name = name.strip()
-                                current_staff_caps[name] = [s.strip() for s in shifts.split(",")]
-                                staff_order.append(name)
-                        st.session_state['staff_caps'] = current_staff_caps
-                        
-                        # 3. 排序與準備資料
-                        name_col = '姓名' if '姓名' in final_vacation_df.columns else 'Name'
-                        final_vacation_df[name_col] = pd.Categorical(final_vacation_df[name_col], categories=staff_order, ordered=True)
-                        final_vacation_df = final_vacation_df.sort_values(name_col).reset_index(drop=True)
-                        
-                        # 4. 執行配班 (調用新版支援上限邏輯的 v4 引擎)
-                        from scheduler import assign_shifts_logic_v4
-                        final_result = assign_shifts_logic_v4(
-                            final_vacation_df, 
-                            st.session_state['staff_caps'], 
-                            st.session_state['demand_config']
-                        )
-                        st.session_state['final_schedule'] = final_result
-                        st.success("✅ 已根據人數下限與上限完成自動配班！")
-                        st.dataframe(final_result, use_container_width=True)
-                        
-                    except Exception as e:
-                        st.error(f"❌ 處理失敗：{e}")
+                try:
+                    # 1. 解析需求配置 (包含 Min 與 Max)
+                    min_demand_dict = {line.split(":")[0].strip(): int(line.split(":")[1].strip()) 
+                                     for line in min_demand_input.split('\n') if ":" in line}
+                    
+                    max_demand_dict = {line.split(":")[0].strip(): int(line.split(":")[1].strip()) 
+                                     for line in max_demand_input.split('\n') if ":" in line}
+                    
+                    st.session_state['demand_config'] = {
+                        "min_demand": min_demand_dict, 
+                        "max_demand": max_demand_dict,
+                        "total_priority_target": target_total
+                    }
+                    
+                    # 2. 解析員工權限
+                    current_staff_caps = {}
+                    staff_order = []
+                    for line in caps_text.split('\n'):
+                        if ":" in line:
+                            name, shifts = line.split(":")
+                            name = name.strip()
+                            current_staff_caps[name] = [s.strip() for s in shifts.split(",")]
+                            staff_order.append(name)
+                    st.session_state['staff_caps'] = current_staff_caps
+                    
+                    # 3. 排序與準備資料
+                    name_col = '姓名' if '姓名' in final_vacation_df.columns else 'Name'
+                    final_vacation_df[name_col] = pd.Categorical(final_vacation_df[name_col], categories=staff_order, ordered=True)
+                    final_vacation_df = final_vacation_df.sort_values(name_col).reset_index(drop=True)
+                    
+                    # 4. 執行配班 (調用支援上限邏輯的 v4 引擎)
+                    from scheduler import assign_shifts_logic_v4
+                    final_result = assign_shifts_logic_v4(
+                        final_vacation_df, 
+                        st.session_state['staff_caps'], 
+                        st.session_state['demand_config']
+                    )
+                    st.session_state['final_schedule'] = final_result
+                    st.success("✅ 已根據人數下限與上限完成自動配班！")
+                    st.dataframe(final_result, use_container_width=True)
+                    
+                except Exception as e:
+                    st.error(f"❌ 處理失敗：{e}")
 
 # --- 第四步驟：結果顯示與優化區塊 ---
         if 'final_schedule' in st.session_state:
@@ -283,7 +225,7 @@ elif page == "3. 一鍵排班":
             st.subheader("📍 第一階段：原始配班結果")
             st.info("這是根據需求人數與員工權限初步分配的結果。")
             
-            # 1. 顯示原始配班結果 (不帶顏色)
+            # 1. 顯示原始配班結果
             st.dataframe(st.session_state['final_schedule'], use_container_width=True)
             
             # 2. 順班優化按鈕區
@@ -297,12 +239,10 @@ elif page == "3. 一鍵排班":
                 if 'staff_caps' in st.session_state:
                     with st.spinner("優化中..."):
                         from scheduler import smooth_shifts_v4
-                        # 執行優化，取得優化後的 DF 與 變動標記
                         optimized_df, change_mask = smooth_shifts_v4(
                             st.session_state['final_schedule'], 
                             st.session_state['staff_caps']
                         )
-                        # 將優化後的結果存入另一個 state，避免覆蓋掉原始結果以便對照
                         st.session_state['optimized_schedule'] = optimized_df
                         st.session_state['change_mask'] = change_mask
                         st.success("優化完成！請查看下方對照結果。")
