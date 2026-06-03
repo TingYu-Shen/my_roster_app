@@ -26,11 +26,11 @@ def parse_exclusion(input_str):
     return groups
 
 # --- 側邊欄導覽 ---
-st.sidebar.title("📅 排班管理系統")
-page = st.sidebar.radio("選擇功能模組", ["1. 休假生成 (Python 版)", "2. 休假檢核", "3. 一鍵排班"])
+st.sidebar.title("📅 排班工具")
+page = st.sidebar.radio("選擇功能模組", ["1. 休假生成", "2. 休假檢核", "3. 一鍵排班"])
 
 # --- 功能 1：休假生成 ---
-if page == "1. 休假生成 (Python 版)":
+if page == "1. 休假生成":
     st.header("✨ 功能一：月休假自動補件")
     st.info("使用 Python 引擎進行精確計算。**規則：每週務必有 2 個 DO (不含 AL)**。")
     
@@ -50,7 +50,7 @@ if page == "1. 休假生成 (Python 版)":
         st.subheader("原始資料預覽")
         st.dataframe(df, use_container_width=True)
         
-        if st.button("🚀 執行 Python 自動排班"):
+        if st.button("🚀 執行自動補休假"):
             with st.spinner("引擎計算中..."):
                 try:
                     processed_df = scheduler.solve_scheduling_df(
@@ -104,7 +104,7 @@ elif page == "2. 休假檢核":
         st.dataframe(check_df, use_container_width=True)
         
         # 已移除 AI 分析按鈕，僅保留 Python 系統精確檢核
-        if st.button("🚀 執行系統精確檢核 (Python 版)"):
+        if st.button("🚀 執行休假檢核"):
             try:
                 report = checker.check_rules(
                     check_df, 
